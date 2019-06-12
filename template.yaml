@@ -24,14 +24,34 @@ Resources:
       Environment:
         Variables:
           STATE_MACHINE_ARN: !Ref MyStateMachine
-  Task2:
+      Events:
+        rawData:
+          Type: S3
+          Properties:
+            Bucket: !Ref rawData
+            Events:
+              - s3:ObjectCreated:*
+              - s3:ObjectRemoved:*
+  rawData:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-rawdata-${AWS::AccountId}
+  paystubs:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-paystubs-${AWS::AccountId}
+  processedData:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-processda-${AWS::AccountId}
+  processData:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub ${AWS::StackName}-Task2
+      FunctionName: !Sub ${AWS::StackName}-processData
       Description: !Sub
         - Stack ${StackTagName} Environment ${EnvironmentTagName} Function ${ResourceName}
-        - ResourceName: Task2
-      CodeUri: src/Task2
+        - ResourceName: processData
+      CodeUri: src/processData
       Handler: index.handler
       Runtime: nodejs8.10
       MemorySize: 3008
@@ -39,14 +59,22 @@ Resources:
       Tracing: Active
       Policies:
         - AWSXrayWriteOnlyAccess
-  Task3:
+        - S3CrudPolicy:
+            BucketName: !Ref processedData
+        - S3CrudPolicy:
+            BucketName: !Sub ${AWS::StackName}-rawdata-${AWS::AccountId}
+      Environment:
+        Variables:
+          processedData_S3_BUCKET_NAME: !Ref processedData
+          processedData_S3_BUCKET_ARN: !GetAtt processedData.Arn
+  generatePaystubs:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub ${AWS::StackName}-Task3
+      FunctionName: !Sub ${AWS::StackName}-generatePaystubs
       Description: !Sub
         - Stack ${StackTagName} Environment ${EnvironmentTagName} Function ${ResourceName}
-        - ResourceName: Task3
-      CodeUri: src/Task3
+        - ResourceName: generatePaystubs
+      CodeUri: src/generatePaystubs
       Handler: index.handler
       Runtime: nodejs8.10
       MemorySize: 3008
@@ -54,14 +82,24 @@ Resources:
       Tracing: Active
       Policies:
         - AWSXrayWriteOnlyAccess
-  Task1:
+        - S3CrudPolicy:
+            BucketName: !Ref processedData
+        - S3CrudPolicy:
+            BucketName: !Ref paystubs
+      Environment:
+        Variables:
+          processedData_S3_BUCKET_NAME: !Ref processedData
+          processedData_S3_BUCKET_ARN: !GetAtt processedData.Arn
+          paystubs_S3_BUCKET_NAME: !Ref paystubs
+          paystubs_S3_BUCKET_ARN: !GetAtt paystubs.Arn
+  generateReport:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub ${AWS::StackName}-Task1
+      FunctionName: !Sub ${AWS::StackName}-generateReport
       Description: !Sub
         - Stack ${StackTagName} Environment ${EnvironmentTagName} Function ${ResourceName}
-        - ResourceName: Task1
-      CodeUri: src/Task1
+        - ResourceName: generateReport
+      CodeUri: src/generateReport
       Handler: index.handler
       Runtime: nodejs8.10
       MemorySize: 3008
@@ -69,6 +107,12 @@ Resources:
       Tracing: Active
       Policies:
         - AWSXrayWriteOnlyAccess
+        - S3CrudPolicy:
+            BucketName: !Ref paystubs
+      Environment:
+        Variables:
+          paystubs_S3_BUCKET_NAME: !Ref paystubs
+          paystubs_S3_BUCKET_ARN: !GetAtt paystubs.Arn
   StatesExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -96,32 +140,32 @@ Resources:
       DefinitionString: !Sub
         - |-
           {
-            "Comment": "A Hello World AWL example using an AWS Lambda function",
-            "StartAt": "Task1",
+            "Comment": "Payroll processing example.",
+            "StartAt": "processData",
             "States": {
-              "Task1": {
+              "processData": {
                 "Type": "Task",
                 "Resource": "${Lambda1}",
-                "Next": "Task2",
+                "Next": "generatePaystubs",
                 "Comment": "First task. Accept input at the beginning of the execution."
               },
-              "Task2": {
+              "generatePaystubs": {
                 "Type": "Task",
                 "Resource": "${Lambda2}",
-                "Next": "Task3",
-                "Comment": "Second task"
+                "Next": "generateReport",
+                "Comment": "Second task."
               },
-              "Task3": {
+              "generateReport": {
                 "Type": "Task",
                 "Resource": "${Lambda3}",
                 "End": true,
-                "Comment": "Third/final task"
+                "Comment": "Third/final task."
               }
             }
           }
-        - Lambda1: !GetAtt Task1.Arn
-          Lambda2: !GetAtt Task2.Arn
-          Lambda3: !GetAtt Task3.Arn
+        - Lambda1: !GetAtt processData.Arn
+          Lambda2: !GetAtt generatePaystubs.Arn
+          Lambda3: !GetAtt generateReport.Arn
       RoleArn: !GetAtt StatesExecutionRole.Arn
 Parameters:
   StackTagName:
